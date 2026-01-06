@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -13,7 +14,8 @@ from typing import Any, Dict, List, Optional
 import psycopg2
 import psycopg2.extras
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -29,6 +31,9 @@ DB_PASSWORD = os.getenv("USK_DB_PASSWORD", "postgres")
 
 DEFAULT_DB_NAME = os.getenv("USK_DB_DEFAULT", "postgres")
 SQLITE_PATH = Path(os.getenv("USK_SQLITE_PATH", "usk.sqlite3"))
+KDF_ITERATIONS = int(os.getenv("USK_KDF_ITERATIONS", "200000"))
+KDF_SALT_BYTES = 16
+KDF_NONCE_BYTES = 12
 
 SCHEMA_SQL_POSTGRES = """
                       CREATE TABLE IF NOT EXISTS site_backups
@@ -42,14 +47,20 @@ SCHEMA_SQL_POSTGRES = """
                           UNIQUE
                           NOT
                           NULL,
-                          cookies
-                          JSONB
+                          payload
+                          BYTEA
                           NOT
                           NULL,
-                          local_storage
-                          JSONB
+                          encrypted
+                          BOOLEAN
                           NOT
-                          NULL,
+                          NULL
+                          DEFAULT
+                          FALSE,
+                          salt
+                          BYTEA,
+                          nonce
+                          BYTEA,
                           updated_at
                           TIMESTAMP
                           DEFAULT
@@ -70,14 +81,20 @@ SCHEMA_SQL_SQLITE = """
                         UNIQUE
                         NOT
                         NULL,
-                        cookies
-                        TEXT
+                        payload
+                        BLOB
                         NOT
                         NULL,
-                        local_storage
-                        TEXT
+                        encrypted
+                        INTEGER
                         NOT
-                        NULL,
+                        NULL
+                        DEFAULT
+                        0,
+                        salt
+                        BLOB,
+                        nonce
+                        BLOB,
                         updated_at
                         TEXT
                         DEFAULT
@@ -133,6 +150,59 @@ class BackupStatusResponse(BaseModel):
     updated_at: Optional[str] = None
 
 
+def derive_key(password: str, salt: bytes) -> bytes:
+    """派生加密密钥
+
+    :param password: encryption password.
+    :param salt: random salt.
+
+    :return: derived key bytes.
+    """
+
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt,
+        KDF_ITERATIONS,
+        dklen=32,
+    )
+
+
+def encrypt_payload(payload: Dict[str, Any], password: str) -> Dict[str, bytes]:
+    """加密 payload
+
+    :param payload: payload dict.
+    :param password: encryption password.
+
+    :return: encrypted blob with salt/nonce.
+    """
+
+    salt = os.urandom(KDF_SALT_BYTES)
+    nonce = os.urandom(KDF_NONCE_BYTES)
+    key = derive_key(password, salt)
+    aesgcm = AESGCM(key)
+    plaintext = json.dumps(payload).encode("utf-8")
+    ciphertext = aesgcm.encrypt(nonce, plaintext, None)
+    return {"payload": ciphertext, "salt": salt, "nonce": nonce}
+
+
+def decrypt_payload(payload: bytes, password: str, salt: bytes, nonce: bytes) -> Dict[str, Any]:
+    """解密 payload
+
+    :param payload: encrypted bytes.
+    :param password: encryption password.
+    :param salt: kdf salt.
+    :param nonce: aesgcm nonce.
+
+    :return: decrypted payload dict.
+    """
+
+    key = derive_key(password, salt)
+    aesgcm = AESGCM(key)
+    plaintext = aesgcm.decrypt(nonce, payload, None)
+    return json.loads(plaintext.decode("utf-8"))
+
+
 class StorageBackend:
     """存储后端抽象层"""
 
@@ -153,10 +223,21 @@ class StorageBackend:
 
         raise NotImplementedError
 
-    def save_backup(self, payload: BackupPayload) -> None:
+    def save_backup(
+        self,
+        domain: str,
+        payload: bytes,
+        encrypted: bool,
+        salt: Optional[bytes],
+        nonce: Optional[bytes],
+    ) -> None:
         """保存备份
 
-        :param payload: backup payload.
+        :param domain: root domain.
+        :param payload: payload bytes.
+        :param encrypted: encrypted flag.
+        :param salt: kdf salt.
+        :param nonce: aesgcm nonce.
         :return: n/a.
         """
 
@@ -222,6 +303,23 @@ class PostgresStorage(StorageBackend):
             with self._connect(self._db_name) as conn:
                 with conn.cursor() as cur:
                     cur.execute(SCHEMA_SQL_POSTGRES)
+                    cur.execute(
+                        "ALTER TABLE site_backups "
+                        "ADD COLUMN IF NOT EXISTS payload BYTEA"
+                    )
+                    cur.execute(
+                        "ALTER TABLE site_backups "
+                        "ADD COLUMN IF NOT EXISTS encrypted BOOLEAN "
+                        "DEFAULT FALSE"
+                    )
+                    cur.execute(
+                        "ALTER TABLE site_backups "
+                        "ADD COLUMN IF NOT EXISTS salt BYTEA"
+                    )
+                    cur.execute(
+                        "ALTER TABLE site_backups "
+                        "ADD COLUMN IF NOT EXISTS nonce BYTEA"
+                    )
             LOGGER.info("Postgres schema ensured")
         except Exception as exc:
             LOGGER.exception("Failed to ensure postgres schema")
@@ -245,24 +343,35 @@ class PostgresStorage(StorageBackend):
 
         return row["updated_at"].isoformat()
 
-    def save_backup(self, payload: BackupPayload) -> None:
+    def save_backup(
+        self,
+        domain: str,
+        payload: bytes,
+        encrypted: bool,
+        salt: Optional[bytes],
+        nonce: Optional[bytes],
+    ) -> None:
         try:
             with self._connect(self._db_name) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        INSERT INTO site_backups (domain, cookies, local_storage)
-                        VALUES (%s, %s, %s) ON CONFLICT (domain)
+                        INSERT INTO site_backups (domain, payload, encrypted, salt, nonce)
+                        VALUES (%s, %s, %s, %s, %s) ON CONFLICT (domain)
                         DO
                         UPDATE SET
-                            cookies = EXCLUDED.cookies,
-                            local_storage = EXCLUDED.local_storage,
+                            payload = EXCLUDED.payload,
+                            encrypted = EXCLUDED.encrypted,
+                            salt = EXCLUDED.salt,
+                            nonce = EXCLUDED.nonce,
                             updated_at = CURRENT_TIMESTAMP
                         """,
                         (
-                            payload.domain,
-                            psycopg2.extras.Json(payload.cookies),
-                            psycopg2.extras.Json(payload.local_storage),
+                            domain,
+                            psycopg2.Binary(payload),
+                            encrypted,
+                            psycopg2.Binary(salt) if salt else None,
+                            psycopg2.Binary(nonce) if nonce else None,
                         ),
                     )
         except Exception as exc:
@@ -274,7 +383,7 @@ class PostgresStorage(StorageBackend):
             with self._connect(self._db_name) as conn:
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                     cur.execute(
-                        "SELECT domain, cookies, local_storage, updated_at "
+                        "SELECT domain, payload, encrypted, salt, nonce, updated_at "
                         "FROM site_backups WHERE domain = %s",
                         (domain,),
                     )
@@ -288,8 +397,10 @@ class PostgresStorage(StorageBackend):
 
         return {
             "domain": row["domain"],
-            "cookies": row["cookies"],
-            "local_storage": row["local_storage"],
+            "payload": row["payload"],
+            "encrypted": bool(row["encrypted"]),
+            "salt": row["salt"],
+            "nonce": row["nonce"],
             "updated_at": row["updated_at"].isoformat(),
         }
 
@@ -324,6 +435,21 @@ class SqliteStorage(StorageBackend):
                 self._path.parent.mkdir(parents=True, exist_ok=True)
             with self._connect() as conn:
                 conn.execute(SCHEMA_SQL_SQLITE)
+                columns = {
+                    row[1]
+                    for row in conn.execute("PRAGMA table_info(site_backups)")
+                }
+                if "payload" not in columns:
+                    conn.execute("ALTER TABLE site_backups ADD COLUMN payload BLOB")
+                if "encrypted" not in columns:
+                    conn.execute(
+                        "ALTER TABLE site_backups "
+                        "ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0"
+                    )
+                if "salt" not in columns:
+                    conn.execute("ALTER TABLE site_backups ADD COLUMN salt BLOB")
+                if "nonce" not in columns:
+                    conn.execute("ALTER TABLE site_backups ADD COLUMN nonce BLOB")
             LOGGER.info("SQLite schema ensured at %s", self._path)
         except Exception as exc:
             LOGGER.exception("Failed to ensure sqlite schema")
@@ -347,22 +473,33 @@ class SqliteStorage(StorageBackend):
 
         return row["updated_at"]
 
-    def save_backup(self, payload: BackupPayload) -> None:
+    def save_backup(
+        self,
+        domain: str,
+        payload: bytes,
+        encrypted: bool,
+        salt: Optional[bytes],
+        nonce: Optional[bytes],
+    ) -> None:
         try:
             with self._connect() as conn:
                 conn.execute(
                     """
-                    INSERT INTO site_backups (domain, cookies, local_storage)
-                    VALUES (?, ?, ?) ON CONFLICT(domain) DO
+                    INSERT INTO site_backups (domain, payload, encrypted, salt, nonce)
+                    VALUES (?, ?, ?, ?, ?) ON CONFLICT(domain) DO
                     UPDATE SET
-                        cookies = excluded.cookies,
-                        local_storage = excluded.local_storage,
+                        payload = excluded.payload,
+                        encrypted = excluded.encrypted,
+                        salt = excluded.salt,
+                        nonce = excluded.nonce,
                         updated_at = CURRENT_TIMESTAMP
                     """,
                     (
-                        payload.domain,
-                        json.dumps(payload.cookies),
-                        json.dumps(payload.local_storage),
+                        domain,
+                        payload,
+                        1 if encrypted else 0,
+                        salt,
+                        nonce,
                     ),
                 )
         except Exception as exc:
@@ -374,7 +511,7 @@ class SqliteStorage(StorageBackend):
             with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
                 cur = conn.execute(
-                    "SELECT domain, cookies, local_storage, updated_at "
+                    "SELECT domain, payload, encrypted, salt, nonce, updated_at "
                     "FROM site_backups WHERE domain = ?",
                     (domain,),
                 )
@@ -388,8 +525,10 @@ class SqliteStorage(StorageBackend):
 
         return {
             "domain": row["domain"],
-            "cookies": json.loads(row["cookies"]),
-            "local_storage": json.loads(row["local_storage"]),
+            "payload": row["payload"],
+            "encrypted": bool(row["encrypted"]),
+            "salt": row["salt"],
+            "nonce": row["nonce"],
             "updated_at": row["updated_at"],
         }
 
@@ -509,16 +648,40 @@ async def backup_status(domain: str) -> BackupStatusResponse:
 
 
 @app.post("/backup")
-async def backup_site(payload: BackupPayload) -> Dict[str, str]:
+async def backup_site(
+    payload: BackupPayload,
+    password: Optional[str] = Header(default=None, alias="X-USK-Password"),
+) -> Dict[str, str]:
     """保存站点状态
 
     :param payload: backup payload.
     :return: result message.
     """
 
+    payload_data = {
+        "cookies": payload.cookies,
+        "local_storage": payload.local_storage,
+    }
+    encrypted = bool(password)
+    if encrypted:
+        encrypted_blob = encrypt_payload(payload_data, password)
+        payload_bytes = encrypted_blob["payload"]
+        salt = encrypted_blob["salt"]
+        nonce = encrypted_blob["nonce"]
+    else:
+        payload_bytes = json.dumps(payload_data).encode("utf-8")
+        salt = None
+        nonce = None
+
     try:
         storage = get_storage()
-        storage.save_backup(payload)
+        storage.save_backup(
+            payload.domain,
+            payload_bytes,
+            encrypted,
+            salt,
+            nonce,
+        )
         LOGGER.info("Backup saved for %s", payload.domain)
     except Exception as exc:
         LOGGER.exception("Failed to save backup")
@@ -528,7 +691,10 @@ async def backup_site(payload: BackupPayload) -> Dict[str, str]:
 
 
 @app.get("/restore/{domain}", response_model=BackupResponse)
-async def restore_site(domain: str) -> BackupResponse:
+async def restore_site(
+    domain: str,
+    password: Optional[str] = Header(default=None, alias="X-USK-Password"),
+) -> BackupResponse:
     """读取站点状态
 
     :param domain: root domain.
@@ -545,10 +711,32 @@ async def restore_site(domain: str) -> BackupResponse:
     if not row:
         raise HTTPException(status_code=404, detail="Backup not found")
 
+    if row.get("payload") is None:
+        raise HTTPException(status_code=404, detail="Backup not found")
+
+    payload_bytes = bytes(row["payload"])
+    salt = bytes(row["salt"]) if row.get("salt") is not None else None
+    nonce = bytes(row["nonce"]) if row.get("nonce") is not None else None
+
+    if row.get("encrypted"):
+        if not password:
+            raise HTTPException(status_code=401, detail="Password required")
+        try:
+            payload_data = decrypt_payload(
+                payload_bytes,
+                password,
+                salt or b"",
+                nonce or b"",
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=401, detail="Invalid password") from exc
+    else:
+        payload_data = json.loads(payload_bytes.decode("utf-8"))
+
     return BackupResponse(
         domain=row["domain"],
-        cookies=row["cookies"],
-        local_storage=row["local_storage"],
+        cookies=payload_data.get("cookies", []),
+        local_storage=payload_data.get("local_storage", {}),
         updated_at=row["updated_at"],
     )
 

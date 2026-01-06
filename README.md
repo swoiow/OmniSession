@@ -14,11 +14,13 @@ Backup and restore login state (cookies + localStorage) across subdomains via a 
 ```sql
 CREATE TABLE site_backups
 (
-    id            SERIAL PRIMARY KEY,
-    domain        TEXT UNIQUE NOT NULL,
-    cookies       JSONB       NOT NULL,
-    local_storage JSONB       NOT NULL,
-    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    id         SERIAL PRIMARY KEY,
+    domain     TEXT UNIQUE NOT NULL,
+    payload    BYTEA       NOT NULL,
+    encrypted  BOOLEAN     NOT NULL DEFAULT FALSE,
+    salt       BYTEA,
+    nonce      BYTEA,
+    updated_at TIMESTAMP            DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
@@ -45,9 +47,9 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 Use the unified Docker script:
 
 ```bash
-bash scripts/docker.sh build
-bash scripts/docker.sh start
-bash scripts/docker.sh logs
+bash docker.sh build
+bash docker.sh start
+bash docker.sh logs
 ```
 
 ## Extension setup
@@ -55,6 +57,8 @@ bash scripts/docker.sh logs
 1. Open `chrome://extensions` and enable Developer Mode.
 2. Click "Load unpacked" and select the `extension/` directory.
 3. Open extension settings and configure the backend base URL (default is `http://localhost:8000`).
+
+- Optional: set an encryption password; the backend will encrypt backups with it.
 
 ## Usage
 
@@ -75,11 +79,12 @@ Backup flow:
 3. Read localStorage for the current origin.
 4. Use cookie `domain` values to build a candidate host list, then open background tabs per host to read localStorage.
 5. Send `{ domain, cookies, local_storage }` to the backend, where `local_storage` is an origin map.
+   If a password is configured, the extension sends `X-USK-Password` so the backend encrypts the payload.
 
 Restore flow:
 
 1. Read the current tab URL and compute the root domain.
-2. Fetch backup from the backend.
+2. Fetch backup from the backend (with the same password header when configured).
 3. Restore each cookie using its original `domain`, `path`, `secure`, `httpOnly`, and `sameSite` values.
 4. Write localStorage for the current origin immediately, then open background tabs for other origins in the map and
    restore each.
@@ -102,3 +107,7 @@ does not do per-cookie merging.
 Q: Will a `Domain=.v2ex.com` cookie be restored?
 A: Yes. The restore uses the cookie's original `domain` value. Cookies with `domain=.v2ex.com` are set back with that
 same domain, and they apply to subdomains as expected.
+
+Q: How is encryption handled?
+A: The backend uses AES-GCM with a PBKDF2-derived key when the extension provides `X-USK-Password`. Without a password,
+payloads are stored in plaintext. You must use the same password to restore.

@@ -2,6 +2,7 @@ importScripts("i18n.js");
 
 const API_BASE = "http://localhost:8000";
 const API_BASE_KEY = "apiBase";
+const API_PASSWORD_KEY = "apiPassword";
 const DEBUG_LOGS_KEY = "debugLogs";
 const TAB_LOAD_TIMEOUT_MS = 12000;
 
@@ -74,6 +75,14 @@ async function getApiBase() {
       [API_BASE_KEY]
   );
   return data[API_BASE_KEY] || API_BASE;
+}
+
+async function getApiPassword() {
+  const data = await chromePromise(
+      chrome.storage.local.get.bind(chrome.storage.local),
+      [API_PASSWORD_KEY]
+  );
+  return data[API_PASSWORD_KEY] || "";
 }
 
 function waitForTabLoad(tabId) {
@@ -310,6 +319,11 @@ async function runBackup() {
   }
 
   const apiBase = await getApiBase();
+  const apiPassword = await getApiPassword();
+  const headers = {"Content-Type": "application/json"};
+  if (apiPassword) {
+    headers["X-USK-Password"] = apiPassword;
+  }
   debugLog("[USK] Backup payload", {
     apiBase,
     domain: rootDomain,
@@ -318,7 +332,7 @@ async function runBackup() {
   });
   const response = await fetch(`${apiBase}/backup`, {
     method: "POST",
-    headers: {"Content-Type": "application/json"},
+    headers,
     body: JSON.stringify({
       domain: rootDomain,
       cookies,
@@ -394,8 +408,25 @@ async function runRestore() {
 
   const rootDomain = getRootDomain(tab.url);
   const apiBase = await getApiBase();
-  const response = await fetch(`${apiBase}/restore/${encodeURIComponent(rootDomain)}`);
+  const apiPassword = await getApiPassword();
+  const headers = {};
+  if (apiPassword) {
+    headers["X-USK-Password"] = apiPassword;
+  }
+  const response = await fetch(
+      `${apiBase}/restore/${encodeURIComponent(rootDomain)}`,
+      {headers}
+  );
   if (!response.ok) {
+    if (response.status === 401) {
+      const data = await response.json().catch(() => null);
+      if (data && data.detail === "Password required") {
+        throw new Error(USK_I18N.t("error_password_required"));
+      }
+      if (data && data.detail === "Invalid password") {
+        throw new Error(USK_I18N.t("error_invalid_password"));
+      }
+    }
     throw new Error(
         USK_I18N.t("error_restore_failed", {status: response.status})
     );

@@ -1,8 +1,10 @@
 const API_BASE_KEY = "apiBase";
+const API_PASSWORD_KEY = "apiPassword";
 const DEFAULT_API_BASE = "http://localhost:8000";
 const DEBUG_LOGS_KEY = "debugLogs";
 
 const apiBaseInput = document.getElementById("api-base");
+const apiPasswordInput = document.getElementById("api-password");
 const languageSelect = document.getElementById("language");
 const debugLogsInput = document.getElementById("debug-logs");
 const statusEl = document.getElementById("status");
@@ -30,9 +32,10 @@ function chromePromise(fn, ...args) {
 async function loadSettings() {
   const data = await chromePromise(
       chrome.storage.local.get.bind(chrome.storage.local),
-      [API_BASE_KEY, DEBUG_LOGS_KEY, USK_I18N.LANG_KEY]
+      [API_BASE_KEY, API_PASSWORD_KEY, DEBUG_LOGS_KEY, USK_I18N.LANG_KEY]
   );
   apiBaseInput.value = data[API_BASE_KEY] || DEFAULT_API_BASE;
+  apiPasswordInput.value = data[API_PASSWORD_KEY] || "";
   debugLogsInput.checked = Boolean(data[DEBUG_LOGS_KEY]);
   languageSelect.value =
       data[USK_I18N.LANG_KEY] || USK_I18N.getDefaultLang();
@@ -40,12 +43,17 @@ async function loadSettings() {
 
 async function saveSettings() {
   const value = apiBaseInput.value.trim() || DEFAULT_API_BASE;
+  const password = apiPasswordInput.value;
   const debugLogs = debugLogsInput.checked;
   const lang = languageSelect.value;
   await USK_I18N.setStoredLang(lang);
   await chromePromise(
       chrome.storage.local.set.bind(chrome.storage.local),
-      {[API_BASE_KEY]: value, [DEBUG_LOGS_KEY]: debugLogs}
+      {
+        [API_BASE_KEY]: value,
+        [API_PASSWORD_KEY]: password,
+        [DEBUG_LOGS_KEY]: debugLogs,
+      }
   );
   setStatus(USK_I18N.t("status_saved"));
 }
