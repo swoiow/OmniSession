@@ -358,11 +358,13 @@ function buildCookieDetails(cookie, storeId) {
     url,
     name: cookie.name,
     value: cookie.value,
-    domain: cookie.domain,
     path: cookie.path,
     secure: cookie.secure,
     httpOnly: cookie.httpOnly,
   };
+  if (!cookie.hostOnly) {
+    details.domain = cookie.domain;
+  }
   if (storeId) {
     details.storeId = storeId;
   }
