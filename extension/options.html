@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta content="width=device-width, initial-scale=1" name="viewport"/>
+  <title>USK Settings</title>
+  <link href="options.css" rel="stylesheet"/>
+</head>
+<body>
+<main class="container">
+  <h1 data-i18n="options_title">Backend Settings</h1>
+  <p class="hint" data-i18n="options_hint">
+    Set the FastAPI base URL used by the extension.
+  </p>
+  <label class="field">
+    <span data-i18n="label_api_base">API Base URL</span>
+    <input
+        id="api-base"
+        placeholder="http://localhost:8000"
+        type="url"
+    />
+  </label>
+  <label class="field">
+    <span data-i18n="label_language">Language</span>
+    <select id="language">
+      <option data-i18n="language_english" value="en">English</option>
+      <option data-i18n="language_chinese" value="zh">中文</option>
+    </select>
+  </label>
+  <label class="field toggle">
+    <span data-i18n="label_debug_logs">Debug Logs</span>
+    <input id="debug-logs" type="checkbox"/>
+  </label>
+  <div class="actions">
+    <button data-i18n="button_save" id="save">Save</button>
+    <button class="secondary" data-i18n="button_test" id="test">
+      Test Connection
+    </button>
+  </div>
+  <div aria-live="polite" class="status" id="status"></div>
+</main>
+<script src="i18n.js"></script>
+<script src="options.js"></script>
+</body>
+</html>

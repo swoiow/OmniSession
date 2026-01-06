@@ -1,0 +1,117 @@
+:root {
+  color-scheme: light;
+  --ink: #1b1f2a;
+  --muted: #485166;
+  --surface: #ffffff;
+  --accent: #2563eb;
+  --accent-2: #0f766e;
+  --shadow: 0 12px 30px rgba(15, 23, 42, 0.15);
+  font-family: "Libre Baskerville", "Baskerville", "Times New Roman", serif;
+  background: #f2f4f8;
+}
+
+body {
+  margin: 0;
+  min-width: 260px;
+  background: #f2f4f8;
+  color: var(--ink);
+}
+
+.container {
+  padding: 16px;
+  background: var(--surface);
+  border-radius: 14px;
+  margin: 12px;
+  box-shadow: var(--shadow);
+}
+
+h1 {
+  font-size: 16px;
+  margin: 0 0 8px;
+  letter-spacing: 0.2px;
+}
+
+.hint {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--muted);
+  font-family: "Inter", "Segoe UI", "Trebuchet MS", sans-serif;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  font-size: 12px;
+}
+
+.label {
+  font-weight: 600;
+  color: #1f2937;
+  font-family: "Inter", "Segoe UI", "Trebuchet MS", sans-serif;
+}
+
+button {
+  flex: 1;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--accent);
+  color: #ffffff;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.25);
+  font-family: "Inter", "Segoe UI", "Trebuchet MS", sans-serif;
+}
+
+button#restore {
+  background: var(--accent-2);
+  box-shadow: 0 6px 16px rgba(15, 118, 110, 0.25);
+}
+
+button.danger {
+  background: #b91c1c;
+  box-shadow: 0 6px 16px rgba(185, 28, 28, 0.25);
+}
+
+button.secondary {
+  width: 100%;
+  margin-bottom: 8px;
+  background: #1f2937;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.2);
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.2);
+}
+
+.status {
+  min-height: 18px;
+  font-size: 12px;
+  color: var(--ink);
+  font-family: "Inter", "Segoe UI", "Trebuchet MS", sans-serif;
+}
+
+.status.error {
+  color: #b91c1c;
+}

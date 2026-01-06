@@ -1,0 +1,111 @@
+:root {
+  color-scheme: light;
+  --ink: #0f172a;
+  --muted: #475569;
+  --surface: #ffffff;
+  --accent: #2563eb;
+  --accent-2: #0f766e;
+  --shadow: 0 14px 32px rgba(15, 23, 42, 0.18);
+  font-family: "Libre Baskerville", "Baskerville", "Times New Roman", serif;
+  background: #f2f4f8;
+}
+
+body {
+  margin: 0;
+  background: #f2f4f8;
+  color: var(--ink);
+}
+
+.container {
+  max-width: 420px;
+  padding: 20px;
+  margin: 16px;
+  background: var(--surface);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+
+h1 {
+  font-size: 20px;
+  margin: 0 0 8px;
+}
+
+.hint {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--muted);
+  font-family: "Inter", "Segoe UI", "Trebuchet MS", sans-serif;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  margin-bottom: 12px;
+  font-family: "Inter", "Segoe UI", "Trebuchet MS", sans-serif;
+}
+
+.field.toggle {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+input {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  font-size: 13px;
+  font-family: "Inter", "Segoe UI", "Trebuchet MS", sans-serif;
+}
+
+select {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  font-size: 13px;
+  font-family: "Inter", "Segoe UI", "Trebuchet MS", sans-serif;
+  background: #ffffff;
+}
+
+input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-2);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+button {
+  flex: 1;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--accent);
+  color: #ffffff;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.25);
+  font-family: "Inter", "Segoe UI", "Trebuchet MS", sans-serif;
+}
+
+button.secondary {
+  background: var(--accent-2);
+  box-shadow: 0 6px 16px rgba(15, 118, 110, 0.25);
+}
+
+.status {
+  margin-top: 12px;
+  min-height: 18px;
+  font-size: 12px;
+  font-family: "Inter", "Segoe UI", "Trebuchet MS", sans-serif;
+}
+
+.status.error {
+  color: #b91c1c;
+}

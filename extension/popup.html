@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta content="width=device-width, initial-scale=1" name="viewport"/>
+  <title>Universal State Keeper</title>
+  <link href="popup.css" rel="stylesheet"/>
+</head>
+<body>
+<main class="container">
+  <h1 data-i18n="popup_title">Universal State Keeper</h1>
+  <p class="hint" data-i18n="popup_hint">
+    Backup or restore the current site's login state.
+  </p>
+  <div class="status-row">
+    <span class="label" data-i18n="label_backend">Backend</span>
+    <span class="status" data-i18n="status_checking" id="backend-status"
+    >Checking...</span
+    >
+  </div>
+  <div class="status-row">
+    <span class="label" data-i18n="label_backup">Backup</span>
+    <span class="status" data-i18n="status_checking" id="backup-status"
+    >Checking...</span
+    >
+  </div>
+  <div class="actions">
+    <button data-i18n="button_backup" id="backup">Backup</button>
+    <button data-i18n="button_restore" id="restore">Restore</button>
+    <button class="danger" data-i18n="button_delete" id="delete">Delete</button>
+  </div>
+  <div aria-live="polite" class="status" id="status"></div>
+</main>
+<script src="i18n.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>
