@@ -1,0 +1,121 @@
+name: Build and Package USK Backend
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: build-release
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-exe:
+    name: Build EXE on ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ windows-latest ]
+        python-version: [ "3.13" ]
+
+    steps:
+      - name: 📥 Checkout source code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: 📦 Create virtualenv
+        run: |
+          python -m venv venv
+          if [ -x "venv/bin/python" ]; then
+            echo "PYTHON_EXEC=$(pwd)/venv/bin/python" >> $GITHUB_ENV
+          else
+            echo "PYTHON_EXEC=$(pwd)/venv/Scripts/python.exe" >> $GITHUB_ENV
+          fi
+        shell: bash
+
+      - name: 📚 Install build dependencies
+        run: |
+          $PYTHON_EXEC -m pip install --upgrade pip
+          $PYTHON_EXEC -m pip install -r server/requirements.txt
+          $PYTHON_EXEC -m pip install pyinstaller
+        shell: bash
+
+      - name: 🏗️ Build backend EXE (PyInstaller)
+        run: |
+          $PYTHON_EXEC -m PyInstaller server/main.py \
+            --name usk-backend \
+            --onefile \
+            --clean \
+            --noconfirm \
+            --icon=extension/icons/icon-128.png
+        shell: bash
+
+      - name: ⬆️ Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: exe-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: dist/usk-backend.exe
+          retention-days: 3
+
+  package-artifacts:
+    name: Package backend EXE into zip
+    needs: build-exe
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Download EXE artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: collected
+          merge-multiple: true
+
+      - name: 📦 Bundle EXE
+        run: |
+          mkdir -p packaged
+          zip -j packaged/usk-backend-win.zip collected/*
+        shell: bash
+
+      - name: ⬆️ Upload packaged zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: usk-packaged
+          path: packaged/*
+          retention-days: 3
+
+  publish-latest:
+    name: Publish latest release
+    needs: package-artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-dist
+          merge-multiple: true
+
+      - name: 🏷️ Update latest tag
+        run: |
+          git init
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth 1 origin "${GITHUB_SHA}"
+          git checkout "${GITHUB_SHA}"
+          git tag -f latest "${GITHUB_SHA}"
+          git push -f origin latest
+
+      - name: 🚀 Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest Build
+          files: |
+            release-dist/*.zip
