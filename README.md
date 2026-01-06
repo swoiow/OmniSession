@@ -42,16 +42,12 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 ## Docker (backend)
 
+Use the unified Docker script:
+
 ```bash
-cd server
-docker build -t usk-backend .
-docker run --rm -p 8000:8000 ^
-  -e USK_DB_HOST=host.docker.internal ^
-  -e USK_DB_PORT=5432 ^
-  -e USK_DB_NAME=usk ^
-  -e USK_DB_USER=postgres ^
-  -e USK_DB_PASSWORD=postgres ^
-  usk-backend
+bash scripts/docker.sh build
+bash scripts/docker.sh start
+bash scripts/docker.sh logs
 ```
 
 ## Extension setup
