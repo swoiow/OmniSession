@@ -2,7 +2,7 @@ const USK_I18N = (() => {
   const LANG_KEY = "lang";
   const STRINGS = {
     en: {
-      popup_title: "Universal State Keeper",
+      popup_title: "OmniSession",
       popup_hint: "Backup or restore the current site's login state.",
       label_backend: "Backend",
       label_backup: "Backup",
@@ -34,7 +34,7 @@ const USK_I18N = (() => {
       action_restore: "restore",
       action_delete: "delete",
       action_status: "status check",
-      options_title: "Universal State Keeper Settings",
+      options_title: "OmniSession Settings",
       options_hint: "Set the FastAPI base URL used by the extension.",
       label_api_base: "API Base URL",
       label_password: "Encryption Password",
@@ -53,7 +53,7 @@ const USK_I18N = (() => {
       language_chinese: "中文",
     },
     zh: {
-      popup_title: "Universal State Keeper",
+      popup_title: "OmniSession",
       popup_hint: "备份或恢复当前网站的登录状态。",
       label_backend: "后端",
       label_backup: "备份",
@@ -85,7 +85,7 @@ const USK_I18N = (() => {
       action_restore: "恢复",
       action_delete: "删除",
       action_status: "状态查询",
-      options_title: "Universal State Keeper 设置",
+      options_title: "OmniSession 设置",
       options_hint: "设置扩展使用的 FastAPI 地址。",
       label_api_base: "API Base URL",
       label_password: "加密密码",

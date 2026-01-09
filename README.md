@@ -1,4 +1,4 @@
-# Universal State Keeper
+# OmniSession
 
 Backup and restore login state (cookies + localStorage) across subdomains via a Chrome extension and a FastAPI backend.
 

@@ -1,4 +1,4 @@
-"""Universal State Keeper backend."""
+"""OmniSession backend."""
 
 from __future__ import annotations
 
@@ -590,7 +590,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Universal State Keeper", lifespan=lifespan)
+app = FastAPI(title="OmniSession", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
