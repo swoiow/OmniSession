@@ -3,14 +3,25 @@
 <head>
   <meta charset="utf-8"/>
   <meta content="width=device-width, initial-scale=1" name="viewport"/>
-  <title>USK Settings</title>
+  <title>OmniSession Settings</title>
   <link href="options.css" rel="stylesheet"/>
 </head>
 <body>
 <main class="container">
   <h1 data-i18n="options_title">Backend Settings</h1>
   <p class="hint" data-i18n="options_hint">
-    Set the FastAPI base URL used by the extension.
+
+  </p>
+  <label class="field">
+    <span data-i18n="label_email">Email Address</span>
+    <input
+        id="user-email"
+        placeholder="user@example.com"
+        type="email"
+    />
+  </label>
+  <p class="hint" data-i18n="email_hint">
+    User ID is generated from the email address.
   </p>
   <label class="field">
     <span data-i18n="label_api_base">API Base URL</span>
@@ -27,6 +38,10 @@
         id="api-password"
         type="password"
     />
+  </label>
+  <label class="field toggle">
+    <span data-i18n="label_show_password">Show Password</span>
+    <input id="show-password" type="checkbox"/>
   </label>
   <p class="hint" data-i18n="password_hint">
     Optional. If set, the backend encrypts backups with this password.

@@ -19,7 +19,7 @@ body {
 .container {
   max-width: 420px;
   padding: 20px;
-  margin: 16px;
+  margin: 16px auto 0;
   background: var(--surface);
   border-radius: 16px;
   box-shadow: var(--shadow);

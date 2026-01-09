@@ -42,11 +42,16 @@ SCHEMA_SQL_POSTGRES = """
                           SERIAL
                           PRIMARY
                           KEY,
-                          domain
+                          user_id
                           TEXT
-                          UNIQUE
                           NOT
                           NULL,
+                          domain
+                          TEXT
+                          NOT
+                          NULL,
+                          device
+                          TEXT,
                           payload
                           BYTEA
                           NOT
@@ -65,7 +70,8 @@ SCHEMA_SQL_POSTGRES = """
                           TIMESTAMP
                           DEFAULT
                           CURRENT_TIMESTAMP
-                      ); \
+                      );
+                      CREATE UNIQUE INDEX if NOT EXISTS site_backups_user_domain_idx ON site_backups (user_id, DOMAIN);
                       """
 
 SCHEMA_SQL_SQLITE = """
@@ -76,11 +82,16 @@ SCHEMA_SQL_SQLITE = """
                         PRIMARY
                         KEY
                         AUTOINCREMENT,
-                        domain
+                        user_id
                         TEXT
-                        UNIQUE
                         NOT
                         NULL,
+                        domain
+                        TEXT
+                        NOT
+                        NULL,
+                        device
+                        TEXT,
                         payload
                         BLOB
                         NOT
@@ -98,22 +109,30 @@ SCHEMA_SQL_SQLITE = """
                         updated_at
                         TEXT
                         DEFAULT
-                        CURRENT_TIMESTAMP
-                    );
+                        CURRENT_TIMESTAMP,
+                        UNIQUE
+                    (
+                        user_id,
+                        domain
+                    ));
                     """
 
 
 class BackupPayload(BaseModel):
     """站点备份信息
 
+    :param user_id: user id.
     :param domain: root domain.
+    :param device: device name or id.
     :param cookies: cookie list.
     :param local_storage: localStorage dict or origin map.
 
     :return: n/a.
     """
 
+    user_id: str = Field(..., min_length=1)
     domain: str = Field(..., min_length=1)
+    device: Optional[str] = None
     cookies: List[Dict[str, Any]]
     local_storage: Dict[str, Any]
 
@@ -121,6 +140,7 @@ class BackupPayload(BaseModel):
 class BackupResponse(BaseModel):
     """站点恢复信息
 
+    :param user_id: user id.
     :param domain: root domain.
     :param cookies: cookie list.
     :param local_storage: localStorage dict.
@@ -129,6 +149,7 @@ class BackupResponse(BaseModel):
     :return: n/a.
     """
 
+    user_id: str
     domain: str
     cookies: List[Dict[str, Any]]
     local_storage: Dict[str, Any]
@@ -138,6 +159,7 @@ class BackupResponse(BaseModel):
 class BackupStatusResponse(BaseModel):
     """站点备份状态
 
+    :param user_id: user id.
     :param domain: root domain.
     :param exists: backup exists.
     :param updated_at: timestamp when exists.
@@ -145,6 +167,7 @@ class BackupStatusResponse(BaseModel):
     :return: n/a.
     """
 
+    user_id: str
     domain: str
     exists: bool
     updated_at: Optional[str] = None
@@ -214,9 +237,10 @@ class StorageBackend:
 
         raise NotImplementedError
 
-    def fetch_status(self, domain: str) -> Optional[str]:
+    def fetch_status(self, user_id: str, domain: str) -> Optional[str]:
         """读取备份状态
 
+        :param user_id: user id.
         :param domain: root domain.
         :return: updated_at string when exists.
         """
@@ -225,7 +249,9 @@ class StorageBackend:
 
     def save_backup(
         self,
+        user_id: str,
         domain: str,
+        device: Optional[str],
         payload: bytes,
         encrypted: bool,
         salt: Optional[bytes],
@@ -233,7 +259,9 @@ class StorageBackend:
     ) -> None:
         """保存备份
 
+        :param user_id: user id.
         :param domain: root domain.
+        :param device: device name or id.
         :param payload: payload bytes.
         :param encrypted: encrypted flag.
         :param salt: kdf salt.
@@ -243,18 +271,20 @@ class StorageBackend:
 
         raise NotImplementedError
 
-    def restore_backup(self, domain: str) -> Optional[Dict[str, Any]]:
+    def restore_backup(self, user_id: str, domain: str) -> Optional[Dict[str, Any]]:
         """恢复备份
 
+        :param user_id: user id.
         :param domain: root domain.
         :return: backup payload data.
         """
 
         raise NotImplementedError
 
-    def delete_backup(self, domain: str) -> bool:
+    def delete_backup(self, user_id: str, domain: str) -> bool:
         """删除备份
 
+        :param user_id: user id.
         :param domain: root domain.
         :return: delete result.
         """
@@ -305,33 +335,47 @@ class PostgresStorage(StorageBackend):
                     cur.execute(SCHEMA_SQL_POSTGRES)
                     cur.execute(
                         "ALTER TABLE site_backups "
-                        "ADD COLUMN IF NOT EXISTS payload BYTEA"
+                        "ADD COLUMN if NOT EXISTS user_id TEXT"
                     )
                     cur.execute(
                         "ALTER TABLE site_backups "
-                        "ADD COLUMN IF NOT EXISTS encrypted BOOLEAN "
+                        "ADD COLUMN if NOT EXISTS payload BYTEA"
+                    )
+                    cur.execute(
+                        "ALTER TABLE site_backups "
+                        "ADD COLUMN if NOT EXISTS encrypted BOOLEAN "
                         "DEFAULT FALSE"
                     )
                     cur.execute(
                         "ALTER TABLE site_backups "
-                        "ADD COLUMN IF NOT EXISTS salt BYTEA"
+                        "ADD COLUMN if NOT EXISTS device TEXT"
                     )
                     cur.execute(
                         "ALTER TABLE site_backups "
-                        "ADD COLUMN IF NOT EXISTS nonce BYTEA"
+                        "ADD COLUMN if NOT EXISTS salt BYTEA"
+                    )
+                    cur.execute(
+                        "ALTER TABLE site_backups "
+                        "ADD COLUMN if NOT EXISTS nonce BYTEA"
+                    )
+                    cur.execute(
+                        "CREATE UNIQUE INDEX if NOT EXISTS "
+                        "site_backups_user_domain_idx "
+                        "ON site_backups (user_id, DOMAIN)"
                     )
             LOGGER.info("Postgres schema ensured")
         except Exception as exc:
             LOGGER.exception("Failed to ensure postgres schema")
             raise RuntimeError("Failed to ensure postgres schema") from exc
 
-    def fetch_status(self, domain: str) -> Optional[str]:
+    def fetch_status(self, user_id: str, domain: str) -> Optional[str]:
         try:
             with self._connect(self._db_name) as conn:
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                     cur.execute(
-                        "SELECT domain, updated_at FROM site_backups WHERE domain = %s",
-                        (domain,),
+                        "SELECT DOMAIN, updated_at FROM site_backups "
+                        "WHERE user_id = %s AND DOMAIN = %s",
+                        (user_id, domain),
                     )
                     row = cur.fetchone()
         except Exception as exc:
@@ -345,7 +389,9 @@ class PostgresStorage(StorageBackend):
 
     def save_backup(
         self,
+        user_id: str,
         domain: str,
+        device: Optional[str],
         payload: bytes,
         encrypted: bool,
         salt: Optional[bytes],
@@ -356,18 +402,15 @@ class PostgresStorage(StorageBackend):
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        INSERT INTO site_backups (domain, payload, encrypted, salt, nonce)
-                        VALUES (%s, %s, %s, %s, %s) ON CONFLICT (domain)
+                        INSERT INTO site_backups (user_id, domain, device, payload, encrypted, salt, nonce)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, DOMAIN)
                         DO
-                        UPDATE SET
-                            payload = EXCLUDED.payload,
-                            encrypted = EXCLUDED.encrypted,
-                            salt = EXCLUDED.salt,
-                            nonce = EXCLUDED.nonce,
-                            updated_at = CURRENT_TIMESTAMP
+                        UPDATE set device = EXCLUDED.device, payload = EXCLUDED.payload, encrypted = EXCLUDED.encrypted, salt = EXCLUDED.salt, nonce = EXCLUDED.nonce, updated_at = CURRENT_TIMESTAMP
                         """,
                         (
+                            user_id,
                             domain,
+                            device,
                             psycopg2.Binary(payload),
                             encrypted,
                             psycopg2.Binary(salt) if salt else None,
@@ -378,14 +421,14 @@ class PostgresStorage(StorageBackend):
             LOGGER.exception("Failed to save backup")
             raise RuntimeError("Failed to save backup") from exc
 
-    def restore_backup(self, domain: str) -> Optional[Dict[str, Any]]:
+    def restore_backup(self, user_id: str, domain: str) -> Optional[Dict[str, Any]]:
         try:
             with self._connect(self._db_name) as conn:
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                     cur.execute(
-                        "SELECT domain, payload, encrypted, salt, nonce, updated_at "
-                        "FROM site_backups WHERE domain = %s",
-                        (domain,),
+                        "SELECT user_id, DOMAIN, device, payload, encrypted, salt, nonce, updated_at "
+                        "FROM site_backups WHERE user_id = %s AND DOMAIN = %s",
+                        (user_id, domain),
                     )
                     row = cur.fetchone()
         except Exception as exc:
@@ -396,7 +439,9 @@ class PostgresStorage(StorageBackend):
             return None
 
         return {
+            "user_id": row["user_id"],
             "domain": row["domain"],
+            "device": row["device"],
             "payload": row["payload"],
             "encrypted": bool(row["encrypted"]),
             "salt": row["salt"],
@@ -404,13 +449,14 @@ class PostgresStorage(StorageBackend):
             "updated_at": row["updated_at"].isoformat(),
         }
 
-    def delete_backup(self, domain: str) -> bool:
+    def delete_backup(self, user_id: str, domain: str) -> bool:
         try:
             with self._connect(self._db_name) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "DELETE FROM site_backups WHERE domain = %s RETURNING domain",
-                        (domain,),
+                        "DELETE FROM site_backups WHERE user_id = %s AND DOMAIN = %s "
+                        "RETURNING DOMAIN",
+                        (user_id, domain),
                     )
                     row = cur.fetchone()
         except Exception as exc:
@@ -439,29 +485,39 @@ class SqliteStorage(StorageBackend):
                     row[1]
                     for row in conn.execute("PRAGMA table_info(site_backups)")
                 }
+                if "user_id" not in columns:
+                    conn.execute("ALTER TABLE site_backups ADD COLUMN user_id text")
                 if "payload" not in columns:
-                    conn.execute("ALTER TABLE site_backups ADD COLUMN payload BLOB")
+                    conn.execute("ALTER TABLE site_backups ADD COLUMN payload blob")
                 if "encrypted" not in columns:
                     conn.execute(
                         "ALTER TABLE site_backups "
                         "ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0"
                     )
+                if "device" not in columns:
+                    conn.execute("ALTER TABLE site_backups ADD COLUMN device text")
                 if "salt" not in columns:
-                    conn.execute("ALTER TABLE site_backups ADD COLUMN salt BLOB")
+                    conn.execute("ALTER TABLE site_backups ADD COLUMN salt blob")
                 if "nonce" not in columns:
-                    conn.execute("ALTER TABLE site_backups ADD COLUMN nonce BLOB")
+                    conn.execute("ALTER TABLE site_backups ADD COLUMN nonce blob")
+                conn.execute(
+                    "CREATE UNIQUE INDEX if NOT EXISTS "
+                    "site_backups_user_domain_idx "
+                    "ON site_backups (user_id, DOMAIN)"
+                )
             LOGGER.info("SQLite schema ensured at %s", self._path)
         except Exception as exc:
             LOGGER.exception("Failed to ensure sqlite schema")
             raise RuntimeError("Failed to ensure sqlite schema") from exc
 
-    def fetch_status(self, domain: str) -> Optional[str]:
+    def fetch_status(self, user_id: str, domain: str) -> Optional[str]:
         try:
             with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
                 cur = conn.execute(
-                    "SELECT domain, updated_at FROM site_backups WHERE domain = ?",
-                    (domain,),
+                    "SELECT DOMAIN, updated_at FROM site_backups "
+                    "WHERE user_id = ? AND DOMAIN = ?",
+                    (user_id, domain),
                 )
                 row = cur.fetchone()
         except Exception as exc:
@@ -475,7 +531,9 @@ class SqliteStorage(StorageBackend):
 
     def save_backup(
         self,
+        user_id: str,
         domain: str,
+        device: Optional[str],
         payload: bytes,
         encrypted: bool,
         salt: Optional[bytes],
@@ -485,17 +543,14 @@ class SqliteStorage(StorageBackend):
             with self._connect() as conn:
                 conn.execute(
                     """
-                    INSERT INTO site_backups (domain, payload, encrypted, salt, nonce)
-                    VALUES (?, ?, ?, ?, ?) ON CONFLICT(domain) DO
-                    UPDATE SET
-                        payload = excluded.payload,
-                        encrypted = excluded.encrypted,
-                        salt = excluded.salt,
-                        nonce = excluded.nonce,
-                        updated_at = CURRENT_TIMESTAMP
+                    INSERT INTO site_backups (user_id, domain, device, payload, encrypted, salt, nonce)
+                    VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id, DOMAIN) DO
+                    UPDATE set device = excluded.device, payload = excluded.payload, encrypted = excluded.encrypted, salt = excluded.salt, nonce = excluded.nonce, updated_at = CURRENT_TIMESTAMP
                     """,
                     (
+                        user_id,
                         domain,
+                        device,
                         payload,
                         1 if encrypted else 0,
                         salt,
@@ -506,14 +561,14 @@ class SqliteStorage(StorageBackend):
             LOGGER.exception("Failed to save backup")
             raise RuntimeError("Failed to save backup") from exc
 
-    def restore_backup(self, domain: str) -> Optional[Dict[str, Any]]:
+    def restore_backup(self, user_id: str, domain: str) -> Optional[Dict[str, Any]]:
         try:
             with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
                 cur = conn.execute(
-                    "SELECT domain, payload, encrypted, salt, nonce, updated_at "
-                    "FROM site_backups WHERE domain = ?",
-                    (domain,),
+                    "SELECT user_id, DOMAIN, device, payload, encrypted, salt, nonce, updated_at "
+                    "FROM site_backups WHERE user_id = ? AND DOMAIN = ?",
+                    (user_id, domain),
                 )
                 row = cur.fetchone()
         except Exception as exc:
@@ -524,7 +579,9 @@ class SqliteStorage(StorageBackend):
             return None
 
         return {
+            "user_id": row["user_id"],
             "domain": row["domain"],
+            "device": row["device"],
             "payload": row["payload"],
             "encrypted": bool(row["encrypted"]),
             "salt": row["salt"],
@@ -532,12 +589,12 @@ class SqliteStorage(StorageBackend):
             "updated_at": row["updated_at"],
         }
 
-    def delete_backup(self, domain: str) -> bool:
+    def delete_backup(self, user_id: str, domain: str) -> bool:
         try:
             with self._connect() as conn:
                 cur = conn.execute(
-                    "DELETE FROM site_backups WHERE domain = ?",
-                    (domain,),
+                    "DELETE FROM site_backups WHERE user_id = ? AND DOMAIN = ?",
+                    (user_id, domain),
                 )
                 deleted = cur.rowcount > 0
         except Exception as exc:
@@ -623,7 +680,10 @@ async def init_database() -> Dict[str, str]:
 
 
 @app.get("/status/{domain}", response_model=BackupStatusResponse)
-async def backup_status(domain: str) -> BackupStatusResponse:
+async def backup_status(
+    domain: str,
+    user_id: str = Header(..., alias="X-USK-User"),
+) -> BackupStatusResponse:
     """查看备份状态
 
     :param domain: root domain.
@@ -632,15 +692,21 @@ async def backup_status(domain: str) -> BackupStatusResponse:
 
     try:
         storage = get_storage()
-        updated_at = storage.fetch_status(domain)
+        updated_at = storage.fetch_status(user_id, domain)
     except Exception as exc:
         LOGGER.exception("Failed to check backup status")
         raise HTTPException(status_code=500, detail="Failed to check backup status") from exc
 
     if not updated_at:
-        return BackupStatusResponse(domain=domain, exists=False, updated_at=None)
+        return BackupStatusResponse(
+            user_id=user_id,
+            domain=domain,
+            exists=False,
+            updated_at=None,
+        )
 
     return BackupStatusResponse(
+        user_id=user_id,
         domain=domain,
         exists=True,
         updated_at=updated_at,
@@ -676,7 +742,9 @@ async def backup_site(
     try:
         storage = get_storage()
         storage.save_backup(
+            payload.user_id,
             payload.domain,
+            payload.device,
             payload_bytes,
             encrypted,
             salt,
@@ -693,6 +761,7 @@ async def backup_site(
 @app.get("/restore/{domain}", response_model=BackupResponse)
 async def restore_site(
     domain: str,
+    user_id: str = Header(..., alias="X-USK-User"),
     password: Optional[str] = Header(default=None, alias="X-USK-Password"),
 ) -> BackupResponse:
     """读取站点状态
@@ -703,7 +772,7 @@ async def restore_site(
 
     try:
         storage = get_storage()
-        row = storage.restore_backup(domain)
+        row = storage.restore_backup(user_id, domain)
     except Exception as exc:
         LOGGER.exception("Failed to restore backup")
         raise HTTPException(status_code=500, detail="Failed to restore backup") from exc
@@ -734,6 +803,7 @@ async def restore_site(
         payload_data = json.loads(payload_bytes.decode("utf-8"))
 
     return BackupResponse(
+        user_id=row["user_id"],
         domain=row["domain"],
         cookies=payload_data.get("cookies", []),
         local_storage=payload_data.get("local_storage", {}),
@@ -742,7 +812,10 @@ async def restore_site(
 
 
 @app.delete("/backup/{domain}")
-async def delete_backup(domain: str) -> Dict[str, Any]:
+async def delete_backup(
+    domain: str,
+    user_id: str = Header(..., alias="X-USK-User"),
+) -> Dict[str, Any]:
     """删除站点备份
 
     :param domain: root domain.
@@ -751,7 +824,7 @@ async def delete_backup(domain: str) -> Dict[str, Any]:
 
     try:
         storage = get_storage()
-        deleted = storage.delete_backup(domain)
+        deleted = storage.delete_backup(user_id, domain)
     except Exception as exc:
         LOGGER.exception("Failed to delete backup")
         raise HTTPException(status_code=500, detail="Failed to delete backup") from exc

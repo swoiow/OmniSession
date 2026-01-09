@@ -3,6 +3,7 @@ importScripts("i18n.js");
 const API_BASE = "http://localhost:8000";
 const API_BASE_KEY = "apiBase";
 const API_PASSWORD_KEY = "apiPassword";
+const USER_ID_KEY = "userId";
 const DEBUG_LOGS_KEY = "debugLogs";
 const TAB_LOAD_TIMEOUT_MS = 12000;
 
@@ -83,6 +84,14 @@ async function getApiPassword() {
       [API_PASSWORD_KEY]
   );
   return data[API_PASSWORD_KEY] || "";
+}
+
+async function getUserId() {
+  const data = await chromePromise(
+      chrome.storage.local.get.bind(chrome.storage.local),
+      [USER_ID_KEY]
+  );
+  return data[USER_ID_KEY] || "";
 }
 
 function waitForTabLoad(tabId) {
@@ -249,6 +258,10 @@ async function runBackup() {
   }
 
   const rootDomain = getRootDomain(tab.url);
+  const userId = await getUserId();
+  if (!userId) {
+    throw new Error(USK_I18N.t("error_user_id_missing"));
+  }
   const currentUrl = new URL(tab.url);
   const currentOrigin = currentUrl.origin;
   const currentHostname = currentUrl.hostname;
@@ -320,6 +333,7 @@ async function runBackup() {
 
   const apiBase = await getApiBase();
   const apiPassword = await getApiPassword();
+  const device = "";
   const headers = {"Content-Type": "application/json"};
   if (apiPassword) {
     headers["X-USK-Password"] = apiPassword;
@@ -334,6 +348,8 @@ async function runBackup() {
     method: "POST",
     headers,
     body: JSON.stringify({
+      user_id: userId,
+      device,
       domain: rootDomain,
       cookies,
       local_storage: localStorageMap,
@@ -409,9 +425,13 @@ async function runRestore() {
   }
 
   const rootDomain = getRootDomain(tab.url);
+  const userId = await getUserId();
+  if (!userId) {
+    throw new Error(USK_I18N.t("error_user_id_missing"));
+  }
   const apiBase = await getApiBase();
   const apiPassword = await getApiPassword();
-  const headers = {};
+  const headers = {"X-USK-User": userId};
   if (apiPassword) {
     headers["X-USK-Password"] = apiPassword;
   }
@@ -479,10 +499,14 @@ async function runDelete() {
   }
 
   const rootDomain = getRootDomain(tab.url);
+  const userId = await getUserId();
+  if (!userId) {
+    throw new Error(USK_I18N.t("error_user_id_missing"));
+  }
   const apiBase = await getApiBase();
   const response = await fetch(
       `${apiBase}/backup/${encodeURIComponent(rootDomain)}`,
-      {method: "DELETE"}
+      {method: "DELETE", headers: {"X-USK-User": userId}}
   );
 
   if (!response.ok) {
@@ -509,6 +533,10 @@ async function runCheck() {
   }
 
   const apiBase = await getApiBase();
+  const userId = await getUserId();
+  if (!userId) {
+    throw new Error(USK_I18N.t("error_user_id_missing"));
+  }
   let backendOk = false;
   try {
     const response = await fetch(`${apiBase}/`);
@@ -523,7 +551,10 @@ async function runCheck() {
   }
 
   try {
-    const response = await fetch(`${apiBase}/status/${encodeURIComponent(rootDomain)}`);
+    const response = await fetch(
+        `${apiBase}/status/${encodeURIComponent(rootDomain)}`,
+        {headers: {"X-USK-User": userId}}
+    );
     if (!response.ok) {
       return {backendOk: true, domain: rootDomain, hasBackup: false, updatedAt: null};
     }
