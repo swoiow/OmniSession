@@ -63,7 +63,7 @@ bash docker.sh logs
 3. Open extension settings and configure the backend base URL (default is `http://localhost:8000`).
 
 - Set your email address in settings to generate a user ID.
-- Optional: set an encryption password; the backend will encrypt backups with it.
+- Optional: set an encryption password; backups are end-to-end encrypted before upload.
 
 ## Usage
 
@@ -84,13 +84,14 @@ Backup flow:
 3. Read localStorage for the current origin.
 4. Use cookie `domain` values to build a candidate host list, then open background tabs per host to read localStorage.
 5. Send `{ domain, cookies, local_storage }` to the backend, where `local_storage` is an origin map.
-   The payload includes `user_id` (derived from email). If a password is configured, the extension sends
-   `X-USK-Password` so the backend encrypts the payload.
+   The payload includes `user_id` (derived from email). If a password is configured, the extension uses
+   `/e2e/backup` and uploads an encrypted payload instead of plaintext.
 
 Restore flow:
 
 1. Read the current tab URL and compute the root domain.
-2. Fetch backup from the backend with `X-USK-User` (and `X-USK-Password` when configured).
+2. Fetch backup from the backend with `X-USK-User`. When a password is configured, the extension uses
+   `/e2e/restore` and decrypts the payload locally.
 3. Restore each cookie using its original `domain`, `path`, `secure`, `httpOnly`, and `sameSite` values.
 4. Write localStorage for the current origin immediately, then open background tabs for other origins in the map and
    restore each.
@@ -115,5 +116,6 @@ A: Yes. The restore uses the cookie's original `domain` value. Cookies with `dom
 same domain, and they apply to subdomains as expected.
 
 Q: How is encryption handled?
-A: The backend uses AES-GCM with a PBKDF2-derived key when the extension provides `X-USK-Password`. Without a password,
-payloads are stored in plaintext. You must use the same password to restore.
+A: When a password is set, the extension uses AES-GCM with a PBKDF2-derived key to encrypt the payload locally and
+uploads it through `/e2e/`. The backend stores encrypted payloads without decrypting them. Without a password, payloads
+are stored in plaintext. You must use the same password to restore.

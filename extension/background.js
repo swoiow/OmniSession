@@ -6,6 +6,11 @@ const API_PASSWORD_KEY = "apiPassword";
 const USER_ID_KEY = "userId";
 const DEBUG_LOGS_KEY = "debugLogs";
 const TAB_LOAD_TIMEOUT_MS = 12000;
+const E2E_PREFIX = "/e2e";
+const COOKIE_SIZE_LIMIT_BYTES = 6 * 1024;
+const KDF_ITERATIONS = 200000;
+const KDF_SALT_BYTES = 16;
+const KDF_NONCE_BYTES = 12;
 
 let debugLogsEnabled = false;
 
@@ -18,6 +23,82 @@ function debugLog(message, payload = null) {
     return;
   }
   console.log(message, payload);
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  bytes.forEach((value) => {
+    binary += String.fromCharCode(value);
+  });
+  return btoa(binary);
+}
+
+function base64ToBytes(value) {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+async function deriveKey(password, salt) {
+  const encoder = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+      "raw",
+      encoder.encode(password),
+      "PBKDF2",
+      false,
+      ["deriveKey"]
+  );
+  return crypto.subtle.deriveKey(
+      {
+        name: "PBKDF2",
+        salt,
+        iterations: KDF_ITERATIONS,
+        hash: "SHA-256",
+      },
+      keyMaterial,
+      {name: "AES-GCM", length: 256},
+      false,
+      ["encrypt", "decrypt"]
+  );
+}
+
+async function encryptE2EPayload(payload, password) {
+  const encoder = new TextEncoder();
+  const salt = crypto.getRandomValues(new Uint8Array(KDF_SALT_BYTES));
+  const nonce = crypto.getRandomValues(new Uint8Array(KDF_NONCE_BYTES));
+  const key = await deriveKey(password, salt);
+  const plaintext = encoder.encode(JSON.stringify(payload));
+  const ciphertext = await crypto.subtle.encrypt(
+      {name: "AES-GCM", iv: nonce},
+      key,
+      plaintext
+  );
+  return {
+    payload: bytesToBase64(new Uint8Array(ciphertext)),
+    salt: bytesToBase64(salt),
+    nonce: bytesToBase64(nonce),
+  };
+}
+
+async function decryptE2EPayload(payload, salt, nonce, password) {
+  const decoder = new TextDecoder();
+  const saltBytes = base64ToBytes(salt);
+  const nonceBytes = base64ToBytes(nonce);
+  const key = await deriveKey(password, saltBytes);
+  const plaintext = await crypto.subtle.decrypt(
+      {name: "AES-GCM", iv: nonceBytes},
+      key,
+      base64ToBytes(payload)
+  );
+  return JSON.parse(decoder.decode(new Uint8Array(plaintext)));
+}
+
+function getCookiesSizeBytes(cookies) {
+  const encoder = new TextEncoder();
+  return encoder.encode(JSON.stringify(cookies)).length;
 }
 
 function getRootDomain(url) {
@@ -306,6 +387,14 @@ async function runBackup() {
       filtered: cookies.length,
     });
   }
+  const cookiesSizeBytes = getCookiesSizeBytes(cookies);
+  if (cookiesSizeBytes > COOKIE_SIZE_LIMIT_BYTES) {
+    throw new Error(
+        USK_I18N.t("error_cookie_size_exceeded", {
+          limit: Math.round(COOKIE_SIZE_LIMIT_BYTES / 1024),
+        })
+    );
+  }
   const localStorageData = await readLocalStorage(tab.id);
   const localStorageMap = {
     [currentOrigin]: localStorageData,
@@ -333,27 +422,38 @@ async function runBackup() {
 
   const apiBase = await getApiBase();
   const apiPassword = await getApiPassword();
+  const useE2E = Boolean(apiPassword);
   const device = "";
   const headers = {"Content-Type": "application/json"};
-  if (apiPassword) {
-    headers["X-USK-Password"] = apiPassword;
+  const payloadData = {cookies, local_storage: localStorageMap};
+  let requestBody = {
+    user_id: userId,
+    device,
+    domain: rootDomain,
+  };
+  if (useE2E) {
+    const encryptedPayload = await encryptE2EPayload(payloadData, apiPassword);
+    requestBody = {
+      ...requestBody,
+      payload: encryptedPayload.payload,
+      salt: encryptedPayload.salt,
+      nonce: encryptedPayload.nonce,
+    };
+  } else {
+    requestBody = {...requestBody, ...payloadData};
   }
   debugLog("[USK] Backup payload", {
     apiBase,
     domain: rootDomain,
     cookies: cookies.length,
     localStorageOrigins: Object.keys(localStorageMap).length,
+    e2e: useE2E,
   });
-  const response = await fetch(`${apiBase}/backup`, {
+  const backupPath = useE2E ? `${E2E_PREFIX}/backup` : "/backup";
+  const response = await fetch(`${apiBase}${backupPath}`, {
     method: "POST",
     headers,
-    body: JSON.stringify({
-      user_id: userId,
-      device,
-      domain: rootDomain,
-      cookies,
-      local_storage: localStorageMap,
-    }),
+    body: JSON.stringify(requestBody),
   });
 
   if (!response.ok) {
@@ -431,16 +531,15 @@ async function runRestore() {
   }
   const apiBase = await getApiBase();
   const apiPassword = await getApiPassword();
+  const useE2E = Boolean(apiPassword);
   const headers = {"X-USK-User": userId};
-  if (apiPassword) {
-    headers["X-USK-Password"] = apiPassword;
-  }
+  const restorePath = useE2E ? `${E2E_PREFIX}/restore` : "/restore";
   const response = await fetch(
-      `${apiBase}/restore/${encodeURIComponent(rootDomain)}`,
+      `${apiBase}${restorePath}/${encodeURIComponent(rootDomain)}`,
       {headers}
   );
   if (!response.ok) {
-    if (response.status === 401) {
+    if (!useE2E && response.status === 401) {
       const data = await response.json().catch(() => null);
       if (data && data.detail === "Password required") {
         throw new Error(USK_I18N.t("error_password_required"));
@@ -455,7 +554,28 @@ async function runRestore() {
   }
 
   const data = await response.json();
-  const cookies = Array.isArray(data.cookies) ? data.cookies : [];
+  let cookies = [];
+  let localStorageMap = {};
+  if (useE2E) {
+    if (!apiPassword) {
+      throw new Error(USK_I18N.t("error_password_required"));
+    }
+    try {
+      const decrypted = await decryptE2EPayload(
+          data.payload,
+          data.salt,
+          data.nonce,
+          apiPassword
+      );
+      cookies = Array.isArray(decrypted.cookies) ? decrypted.cookies : [];
+      localStorageMap = decrypted.local_storage || {};
+    } catch (error) {
+      throw new Error(USK_I18N.t("error_invalid_password"));
+    }
+  } else {
+    cookies = Array.isArray(data.cookies) ? data.cookies : [];
+    localStorageMap = data.local_storage || {};
+  }
   const storeId = await getCookieStoreIdForTab(tab.id);
 
   await Promise.all(
@@ -464,7 +584,6 @@ async function runRestore() {
       )
   );
 
-  const localStorageMap = data.local_storage || {};
   const currentOrigin = new URL(tab.url).origin;
   if (localStorageMap[currentOrigin]) {
     await writeLocalStorage(tab.id, localStorageMap[currentOrigin]);
@@ -504,8 +623,10 @@ async function runDelete() {
     throw new Error(USK_I18N.t("error_user_id_missing"));
   }
   const apiBase = await getApiBase();
+  const apiPassword = await getApiPassword();
+  const deletePath = apiPassword ? `${E2E_PREFIX}/backup` : "/backup";
   const response = await fetch(
-      `${apiBase}/backup/${encodeURIComponent(rootDomain)}`,
+      `${apiBase}${deletePath}/${encodeURIComponent(rootDomain)}`,
       {method: "DELETE", headers: {"X-USK-User": userId}}
   );
 
@@ -537,6 +658,8 @@ async function runCheck() {
   if (!userId) {
     throw new Error(USK_I18N.t("error_user_id_missing"));
   }
+  const apiPassword = await getApiPassword();
+  const statusPath = apiPassword ? `${E2E_PREFIX}/status` : "/status";
   let backendOk = false;
   try {
     const response = await fetch(`${apiBase}/`);
@@ -552,7 +675,7 @@ async function runCheck() {
 
   try {
     const response = await fetch(
-        `${apiBase}/status/${encodeURIComponent(rootDomain)}`,
+        `${apiBase}${statusPath}/${encodeURIComponent(rootDomain)}`,
         {headers: {"X-USK-User": userId}}
     );
     if (!response.ok) {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -173,6 +174,48 @@ class BackupStatusResponse(BaseModel):
     updated_at: Optional[str] = None
 
 
+class E2EBackupPayload(BaseModel):
+    """端对端加密备份信息
+
+    :param user_id: user id.
+    :param domain: root domain.
+    :param device: device name or id.
+    :param payload: encrypted payload base64.
+    :param salt: kdf salt base64.
+    :param nonce: aesgcm nonce base64.
+
+    :return: n/a.
+    """
+
+    user_id: str = Field(..., min_length=1)
+    domain: str = Field(..., min_length=1)
+    device: Optional[str] = None
+    payload: str = Field(..., min_length=1)
+    salt: str = Field(..., min_length=1)
+    nonce: str = Field(..., min_length=1)
+
+
+class E2ERestoreResponse(BaseModel):
+    """端对端加密恢复信息
+
+    :param user_id: user id.
+    :param domain: root domain.
+    :param payload: encrypted payload base64.
+    :param salt: kdf salt base64.
+    :param nonce: aesgcm nonce base64.
+    :param updated_at: timestamp.
+
+    :return: n/a.
+    """
+
+    user_id: str
+    domain: str
+    payload: str
+    salt: str
+    nonce: str
+    updated_at: str
+
+
 def derive_key(password: str, salt: bytes) -> bytes:
     """派生加密密钥
 
@@ -224,6 +267,18 @@ def decrypt_payload(payload: bytes, password: str, salt: bytes, nonce: bytes) ->
     aesgcm = AESGCM(key)
     plaintext = aesgcm.decrypt(nonce, payload, None)
     return json.loads(plaintext.decode("utf-8"))
+
+
+def b64_to_bytes(value: str) -> bytes:
+    """Decode base64 string to bytes."""
+
+    return base64.b64decode(value.encode("utf-8"))
+
+
+def bytes_to_b64(value: bytes) -> str:
+    """Encode bytes to base64 string."""
+
+    return base64.b64encode(value).decode("utf-8")
 
 
 class StorageBackend:
@@ -756,6 +811,104 @@ async def backup_site(
         raise HTTPException(status_code=500, detail="Failed to save backup") from exc
 
     return {"status": "ok"}
+
+
+@app.get("/e2e/status/{domain}", response_model=BackupStatusResponse)
+async def backup_status_e2e(
+    domain: str,
+    user_id: str = Header(..., alias="X-USK-User"),
+) -> BackupStatusResponse:
+    """查看端对端备份状态
+
+    :param domain: root domain.
+    :return: backup status.
+    """
+
+    return await backup_status(domain, user_id)
+
+
+@app.post("/e2e/backup")
+async def backup_site_e2e(payload: E2EBackupPayload) -> Dict[str, str]:
+    """保存端对端加密站点状态
+
+    :param payload: e2e backup payload.
+    :return: result message.
+    """
+
+    try:
+        payload_bytes = b64_to_bytes(payload.payload)
+        salt = b64_to_bytes(payload.salt)
+        nonce = b64_to_bytes(payload.nonce)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid e2e payload") from exc
+
+    try:
+        storage = get_storage()
+        storage.save_backup(
+            payload.user_id,
+            payload.domain,
+            payload.device,
+            payload_bytes,
+            True,
+            salt,
+            nonce,
+        )
+        LOGGER.info("E2E backup saved for %s", payload.domain)
+    except Exception as exc:
+        LOGGER.exception("Failed to save e2e backup")
+        raise HTTPException(status_code=500, detail="Failed to save e2e backup") from exc
+
+    return {"status": "ok"}
+
+
+@app.get("/e2e/restore/{domain}", response_model=E2ERestoreResponse)
+async def restore_site_e2e(
+    domain: str,
+    user_id: str = Header(..., alias="X-USK-User"),
+) -> E2ERestoreResponse:
+    """读取端对端加密站点状态
+
+    :param domain: root domain.
+    :return: backup data.
+    """
+
+    try:
+        storage = get_storage()
+        row = storage.restore_backup(user_id, domain)
+    except Exception as exc:
+        LOGGER.exception("Failed to restore e2e backup")
+        raise HTTPException(status_code=500, detail="Failed to restore e2e backup") from exc
+
+    if not row or row.get("payload") is None:
+        raise HTTPException(status_code=404, detail="Backup not found")
+
+    salt = row.get("salt")
+    nonce = row.get("nonce")
+    if salt is None or nonce is None:
+        raise HTTPException(status_code=409, detail="Missing encryption metadata")
+
+    return E2ERestoreResponse(
+        user_id=row["user_id"],
+        domain=row["domain"],
+        payload=bytes_to_b64(bytes(row["payload"])),
+        salt=bytes_to_b64(bytes(salt)),
+        nonce=bytes_to_b64(bytes(nonce)),
+        updated_at=row["updated_at"],
+    )
+
+
+@app.delete("/e2e/backup/{domain}")
+async def delete_backup_e2e(
+    domain: str,
+    user_id: str = Header(..., alias="X-USK-User"),
+) -> Dict[str, Any]:
+    """删除端对端站点备份
+
+    :param domain: root domain.
+    :return: delete result.
+    """
+
+    return await delete_backup(domain, user_id)
 
 
 @app.get("/restore/{domain}", response_model=BackupResponse)

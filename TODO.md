@@ -24,15 +24,15 @@ This is a production-hardening plan with concrete file changes and API adjustmen
   - README.md: recommend HTTPS and reverse proxy.
 - API: No change, but extension blocks insecure base by default.
 
-3) Move encryption to the client (zero-knowledge server)
+3) Move encryption to the client (zero-knowledge server) [Done]
 
 - Change: The extension encrypts payloads with WebCrypto; server stores ciphertext only.
 - Files:
   - extension/background.js: AES-GCM encrypt/decrypt using a user password.
-  - server/main.py: treat payload as opaque bytes (no password header).
+  - server/main.py: add `/e2e/*` endpoints that store ciphertext without decrypting.
   - server/schema migration: keep `payload`, `salt`, `nonce`, `encrypted`.
   - README.md: update encryption flow.
-- API: `/backup` and `/restore/{domain}` stay, but no password header; payload is encrypted blob.
+- API: Use `/e2e/backup`, `/e2e/restore/{domain}`, `/e2e/status/{domain}`, `/e2e/backup/{domain}` for encrypted flow.
 
 4) Restrict CORS and local exposure
 
@@ -69,9 +69,17 @@ This is a production-hardening plan with concrete file changes and API adjustmen
   - README.md: document limits.
 - API: On violation return 413 or 429.
 
+8) Client-side cookie payload cap [Done]
+
+- Change: Enforce a 6 KB cookie payload limit before upload.
+- Files:
+  - extension/background.js: reject backups that exceed 6 KB.
+  - extension/i18n.js: add error message.
+- API: No change.
+
 ## P2 — Product UX & Reliability
 
-8) User/profile scoping
+9) User/profile scoping
 
 - Change: Make backups multi-tenant (profile or user id).
 - Files:
@@ -82,7 +90,7 @@ This is a production-hardening plan with concrete file changes and API adjustmen
   - README.md: document scoping rules.
 - API: `POST /backup` and `GET /restore/{domain}` require `X-USK-Profile` header or `/restore/{profile}/{domain}`.
 
-9) Better error taxonomy and telemetry
+10) Better error taxonomy and telemetry
 
 - Change: Consistent error codes for UI; optional health/metrics endpoint.
 - Files:
@@ -90,7 +98,7 @@ This is a production-hardening plan with concrete file changes and API adjustmen
   - extension/popup.js: display errors by code.
 - API: Add `/metrics` or `/health` with more detail.
 
-10) Background job for cleanup/retention
+11) Background job for cleanup/retention
 
 - Change: Auto-delete old backups by policy.
 - Files:
